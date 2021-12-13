@@ -112,6 +112,9 @@ type raftNodeConfig struct {
 	transport rafthttp.Transporter
 }
 
+/**
+Manage two tickers using one time ticker
+*/
 func newRaftNode(cfg raftNodeConfig) *raftNode {
 	var lg raft.Logger
 	if cfg.lg != nil {

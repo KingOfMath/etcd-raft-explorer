@@ -219,6 +219,7 @@ func StartNode(c *Config, peers []Peer) Node {
 	if len(peers) == 0 {
 		panic("no peers given; use RestartNode instead")
 	}
+	// 创造Raft结构体
 	rn, err := NewRawNode(c)
 	if err != nil {
 		panic(err)
@@ -228,6 +229,7 @@ func StartNode(c *Config, peers []Peer) Node {
 		c.Logger.Warningf("error occurred during starting a new node: %v", err)
 	}
 
+	// 创建node
 	n := newNode(rn)
 
 	go n.run()
@@ -300,6 +302,9 @@ func (n *node) Stop() {
 	<-n.done
 }
 
+/**
+Core function
+*/
 func (n *node) run() {
 	var propc chan msgWithResult
 	var readyc chan Ready
@@ -311,6 +316,7 @@ func (n *node) run() {
 	lead := None
 
 	for {
+		// ready 和 advance只有一个有效
 		if advancec != nil {
 			readyc = nil
 		} else if n.rn.HasReady() {

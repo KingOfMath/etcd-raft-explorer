@@ -47,15 +47,19 @@ func (rn *RawNode) Bootstrap(peers []Peer) error {
 
 	// TODO(tbg): remove StartNode and give the application the right tools to
 	// bootstrap the initial membership in a cleaner way.
+	// 初始化为Follower
 	rn.raft.becomeFollower(1, None)
 	ents := make([]pb.Entry, len(peers))
 	for i, peer := range peers {
+		// 构造结构体
 		cc := pb.ConfChange{Type: pb.ConfChangeAddNode, NodeID: peer.ID, Context: peer.Context}
+		// 调用grpc序列化
 		data, err := cc.Marshal()
 		if err != nil {
 			return err
 		}
 
+		// 构造结构体数据
 		ents[i] = pb.Entry{Type: pb.EntryConfChange, Term: 1, Index: uint64(i + 1), Data: data}
 	}
 	rn.raft.raftLog.append(ents...)

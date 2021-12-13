@@ -49,6 +49,7 @@ type ReadOnlyOption int
 const (
 	// ReadOnlySafe guarantees the linearizability of the read only request by
 	// communicating with the quorum. It is the default and suggested option.
+	// TODO: 为什么要保证quorum交流的只读线性呢？
 	ReadOnlySafe ReadOnlyOption = iota
 	// ReadOnlyLeaseBased ensures linearizability of the read only request by
 	// relying on the leader lease. It can be affected by clock drift.
@@ -59,6 +60,7 @@ const (
 )
 
 // Possible values for CampaignType
+// TODO: 这个是用来干啥的？
 const (
 	// campaignPreElection represents the first phase of a normal election when
 	// Config.PreVote is true.
@@ -120,9 +122,9 @@ type Config struct {
 	// ElectionTick is the number of Node.Tick invocations that must pass between
 	// elections. That is, if a follower does not receive any message from the
 	// leader of current term before ElectionTick has elapsed, it will become
-	// candidate and start an election. ElectionTick must be greater than
-	// HeartbeatTick. We suggest ElectionTick = 10 * HeartbeatTick to avoid
-	// unnecessary leader switching.
+	// candidate and start an election.
+	// ElectionTick must be greater than HeartbeatTick.
+	// We suggest ElectionTick = 10 * HeartbeatTick to avoid unnecessary leader switching.
 	ElectionTick int
 	// HeartbeatTick is the number of Node.Tick invocations that must pass between
 	// heartbeats. That is, a leader sends heartbeat messages to maintain its
@@ -246,6 +248,7 @@ type raft struct {
 	Term uint64
 	Vote uint64
 
+	// read only states
 	readStates []ReadState
 
 	// the log
@@ -371,8 +374,10 @@ func newRaft(c *Config) *raft {
 
 func (r *raft) hasLeader() bool { return r.lead != None }
 
+// do not persist to WAL
 func (r *raft) softState() *SoftState { return &SoftState{Lead: r.lead, RaftState: r.state} }
 
+// persist to WAL
 func (r *raft) hardState() pb.HardState {
 	return pb.HardState{
 		Term:   r.Term,
@@ -645,6 +650,7 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 func (r *raft) tickElection() {
 	r.electionElapsed++
 
+	// 自己可以被promote & election timeout 超时了，规定时间没有听到心跳发起选举
 	if r.promotable() && r.pastElectionTimeout() {
 		r.electionElapsed = 0
 		if err := r.Step(pb.Message{From: r.id, Type: pb.MsgHup}); err != nil {
@@ -658,6 +664,8 @@ func (r *raft) tickHeartbeat() {
 	r.heartbeatElapsed++
 	r.electionElapsed++
 
+	// default 10
+	// 超过则取消leader身份
 	if r.electionElapsed >= r.electionTimeout {
 		r.electionElapsed = 0
 		if r.checkQuorum {
@@ -671,12 +679,14 @@ func (r *raft) tickHeartbeat() {
 		}
 	}
 
+	// Only leader sends heartbeat
 	if r.state != StateLeader {
 		return
 	}
 
 	if r.heartbeatElapsed >= r.heartbeatTimeout {
 		r.heartbeatElapsed = 0
+		// 触发HeartBeat
 		if err := r.Step(pb.Message{From: r.id, Type: pb.MsgBeat}); err != nil {
 			r.logger.Debugf("error occurred during checking sending heartbeat: %v", err)
 		}
@@ -896,6 +906,7 @@ func (r *raft) Step(m pb.Message) error {
 			// but it will not receive MsgApp or MsgHeartbeat, so it will not create
 			// disruptive term increases, by notifying leader of this node's activeness.
 			// The above comments also true for Pre-Vote
+			// TODO: MsgApp 是干嘛的
 			//
 			// When follower gets isolated, it soon starts an election ending
 			// up with a higher term than leader, although it won't receive enough
@@ -903,6 +914,7 @@ func (r *raft) Step(m pb.Message) error {
 			// with "pb.MsgAppResp" of higher term would force leader to step down.
 			// However, this disruption is inevitable to free this stuck node with
 			// fresh election. This can be prevented with Pre-Vote phase.
+			// TODO: Pre-Vote 怎么解决该问题
 			r.send(pb.Message{To: m.From, Type: pb.MsgAppResp})
 		} else if m.Type == pb.MsgPreVote {
 			// Before Pre-Vote enable, there may have candidate with higher term,
@@ -940,6 +952,7 @@ func (r *raft) Step(m pb.Message) error {
 			// This seems counter- intuitive but is necessary in the situation in which
 			// a learner has been promoted (i.e. is now a voter) but has not learned
 			// about this yet.
+			// TODO: 设计一个testcase
 			// For example, consider a group in which id=1 is a learner and id=2 and
 			// id=3 are voters. A configuration change promoting 1 can be committed on
 			// the quorum `{2,3}` without the config change being appended to the
@@ -1285,10 +1298,12 @@ func stepLeader(r *raft, m pb.Message) error {
 		pr.RecentActive = true
 		pr.ProbeSent = false
 
-		// free one slot for the full inflights window to allow progress.
+		// 假如Follower尚未接受的MsgApp已经满了，空出一个slot
 		if pr.State == tracker.StateReplicate && pr.Inflights.Full() {
 			pr.Inflights.FreeFirstOne()
 		}
+
+		// 只有当 leader's last committed index 大于 follower's Match index, 让Follower追加日志
 		if pr.Match < r.raftLog.lastIndex() {
 			r.sendAppend(m.From)
 		}
@@ -1297,6 +1312,7 @@ func stepLeader(r *raft, m pb.Message) error {
 			return nil
 		}
 
+		// 处理只读相关
 		if r.prs.Voters.VoteResult(r.readOnly.recvAck(m.From, m.Context)) != quorum.VoteWon {
 			return nil
 		}
